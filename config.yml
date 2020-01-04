@@ -1,0 +1,33 @@
+server:
+  brokers: ["192.168.0.13:9092"] # the kafka brokers
+  topics: ["topic-state"] # the  kafka topics
+  group: "group-consumer" # the kafka group
+  admin_addr: ":8001" # the admin entrypoint for prometheus and pprof
+  
+  # settings for consummer part
+  consume_routines: 2 # number of the goroutines, for consuming messages from kafka(default 2)
+  consume_buffer: 50 # queue size for all consumer goroutines(default 100)
+ 
+  # setttings for engine part
+  engine_routines: 2 # number of the goroutines, for handling messages(default 2)
+  engine_batch: 5 # batch size for collecting(default 10)
+  engine_buffer: 10 # queue size for all engine goroutines(default 100)
+  engine_delay_time: 2 # waiting for reading channel when receive exit signals(default 2s)
+  engine_refresh_time: 5 # use a timer to refresh the unreached buffer to storage periodly(default 5s)
+
+  # setttings for storage part 
+  storage_routines: 2 # number of the goroutines, for batch inserting(default 2)
+  storage_delay_time: 4 # waiting for reading channel when receive exit signals(default 4s)
+  storage_wait_time: 2 # the waiting time for insertion when database happens exception(default 5s)
+  
+db:
+  user: "postgres" # the username for database
+  passwd: "123456" # the passwd for database
+  host: "192.168.0.13" # the host for database
+  port: "5432" # the port for database
+  name: "consumer" # the database name
+
+redis:
+  passwd: "" # empty if no passwd set for redis
+  addr: "192.168.0.13:6379" # the address for redis
+  db: 0 # 0 - the default db of redis
