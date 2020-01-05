@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"context"
-	"database/sql"
 	"TL-Data-Consumer/config"
 	"TL-Data-Consumer/domain"
 	"TL-Data-Consumer/engine"
+	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"time"
@@ -192,11 +192,7 @@ func (s *Storage) flush(schemas []domain.Schema) error {
 	}
 
 	// commit the transaction
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-
-	return nil
+	return tx.Commit()
 }
 
 // IsReady check if the storage is ready
