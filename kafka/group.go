@@ -23,8 +23,10 @@ func init() {
 }
 
 const (
-	defaultStreamBuffer = 100
-	defaultRoutinesNum  = 2
+	// DefaultStreamBuffer - the queue size for all consumer goroutines
+	DefaultStreamBuffer = 100
+	// DefaultNumberOfRoutines - the number of the goroutines, for consuming messages from kafka
+	DefaultNumberOfRoutines = 2
 )
 
 // Message a message with specific topic
@@ -49,17 +51,16 @@ type Consumer struct {
 // NewConsumer create consumers with number of goroutines
 func NewConsumer(settings *config.Config) *Consumer {
 	if settings.Server.ConsumeBuffer == 0 {
-		settings.Server.ConsumeBuffer = defaultStreamBuffer
+		settings.Server.ConsumeBuffer = DefaultStreamBuffer
 	}
 	if settings.Server.ConsumeRoutines == 0 {
-		settings.Server.ConsumeRoutines = defaultRoutinesNum
+		settings.Server.ConsumeRoutines = DefaultNumberOfRoutines
 	}
 
 	return &Consumer{
 		settings: settings,
-
-		ready:  make(chan struct{}, settings.Server.ConsumeRoutines),
-		stream: make(chan *Message, settings.Server.ConsumeBuffer),
+		ready:    make(chan struct{}, settings.Server.ConsumeRoutines),
+		stream:   make(chan *Message, settings.Server.ConsumeBuffer),
 	}
 }
 

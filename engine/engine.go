@@ -2,144 +2,227 @@ package engine
 
 import (
 	"TL-Data-Consumer/config"
-	"TL-Data-Consumer/domain"
-	"TL-Data-Consumer/entity"
+	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/kafka"
+	"TL-Data-Consumer/model"
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
+	"reflect"
 	"sync"
 	"time"
-
-	redis "github.com/go-redis/redis"
-	"github.com/patrickmn/go-cache"
 )
 
 const (
-	defaultRoutinesNum  = 2
-	defaultBatchCount   = 10
-	defaultStreamBuffer = 100
-	defaultDelayTime    = 2
-	defaultRefreshTime  = 5
+	// DefaultNumberOfRoutines - number of the goroutines, for handling messages(default 2)
+	DefaultNumberOfRoutines = 2
+	// DefaultBatchCount - batch size for collecting(default 10)
+	DefaultBatchCount = 10
+	// DefaultStreamBuffer - queue size for all engine goroutines(default 100)
+	DefaultStreamBuffer = 100
+	// DefaultDelayTime - waiting for reading channel when receive exit signals(default 2s)
+	DefaultDelayTime = 2
+	// DefaultRefreshTime - use a timer to refresh the unreached buffer to storage periodly(default 5s)
+	DefaultRefreshTime = 5
 
-	topicState  = "topic-state"
-	topicMetric = "topic-metric"
+	// SpecialJSONField - the json field uses for nested parsing
+	SpecialJSONField = "data"
+	// DataTypeField - the json field represents for different type of messages
+	DataTypeField = "dtype"
 )
 
 // Engine represents the pipeline for handling messages
 type Engine struct {
-	tokens   *cache.Cache    // the local cache for token
 	consumer *kafka.Consumer // consumer for message stream channel
+	consuler *consul.Consul  // consul for parsing the json schema with table schema
 
-	states    []domain.Schema // state schemas for buffer
-	stateMux  sync.Mutex
-	metrics   []domain.Schema // metric schemas for buffer
-	metricMux sync.Mutex
-
-	redisClient *redis.Client        // maintain a redis connection
-	stream      chan []domain.Schema // schemas stream channel
-	ready       chan struct{}        // mark the engine is ready
-	settings    *config.Config       // server configuration
+	settings *config.Config                   // server configuration
+	cache    map[string]*model.SchemasCarrier // cache for different type of data,
+	cacheMux sync.RWMutex                     // mutex for cache
+	stream   chan *model.SchemasCarrier       // the required json schemas for database
+	ready    chan struct{}                    // mark the engine is ready
 }
 
 // NewEngine returns a new engine
-func NewEngine(settings *config.Config, consumer *kafka.Consumer) *Engine {
+func NewEngine(settings *config.Config, consumer *kafka.Consumer, consuler *consul.Consul) *Engine {
 	if settings.Server.EngineRoutines == 0 {
-		settings.Server.EngineRoutines = defaultRoutinesNum
+		settings.Server.EngineRoutines = DefaultNumberOfRoutines
 	}
 	if settings.Server.EngineBuffer == 0 {
-		settings.Server.EngineBuffer = defaultStreamBuffer
+		settings.Server.EngineBuffer = DefaultStreamBuffer
 	}
 	if settings.Server.EngineBatch == 0 {
-		settings.Server.EngineBatch = defaultBatchCount
+		settings.Server.EngineBatch = DefaultBatchCount
 	}
 	if settings.Server.EngineDelayTime == 0 {
-		settings.Server.EngineDelayTime = defaultDelayTime
+		settings.Server.EngineDelayTime = DefaultDelayTime
 	}
 	if settings.Server.EngineRefreshTime == 0 {
-		settings.Server.EngineRefreshTime = defaultRefreshTime
+		settings.Server.EngineRefreshTime = DefaultRefreshTime
 	}
-
-	// init the redis connection
-	redisClient := redis.NewClient(&redis.Options{
-		Addr:     settings.Redis.Addr,
-		Password: settings.Redis.Passwd, // no password
-		DB:       settings.Redis.DB,     // use default DB
-	})
 
 	return &Engine{
-		settings:    settings,
-		consumer:    consumer,
-		redisClient: redisClient,
-		ready:       make(chan struct{}, settings.Server.EngineRoutines),
-		stream:      make(chan []domain.Schema, settings.Server.EngineBuffer),
-		states:      make([]domain.Schema, 0, settings.Server.EngineBatch),
-		metrics:     make([]domain.Schema, 0, settings.Server.EngineBatch),
-		tokens:      cache.New(24*time.Hour, 48*time.Hour),
+		settings: settings,
+		consumer: consumer,
+		cache:    make(map[string]*model.SchemasCarrier),
+		ready:    make(chan struct{}, settings.Server.EngineRoutines),
+		stream:   make(chan *model.SchemasCarrier, settings.Server.EngineBuffer),
 	}
 }
 
-func (e *Engine) isValid(key string, source string) bool {
-	splits := strings.Split(key, ";")
-	if len(splits) < 2 {
-		return false
+// parse the nested json schema
+func (e *Engine) nested(schema model.JSONSchema) (model.JSONSchema, error) {
+	// check the json field "data"
+	value, exist := schema[SpecialJSONField]
+	if !exist {
+		return nil, fmt.Errorf("json field %s is not found", SpecialJSONField)
 	}
-	userid, token := splits[0], splits[1]
-	// validate token
-	redisKey := userid + ";" + source
 
-	return token == e.fetchToken(redisKey)
-}
-
-func (e *Engine) fetchToken(key string) string {
-	// read from token cache first
-	token, ok := e.tokens.Get(key)
+	// check if the reflect type is map[string]interface{}
+	subSchema, ok := value.(map[string]interface{})
 	if !ok {
-
-		// value will be empty string if key not found
-		value, _ := e.redisClient.Get(key).Result()
-		if len(value) > 0 {
-			// write to cache with default expiration time if value is not empty
-			e.tokens.Set(key, value, cache.DefaultExpiration)
-		}
-		return value
+		return nil, fmt.Errorf("invalid json field: %s, type: %v", SpecialJSONField, reflect.TypeOf(value))
 	}
 
-	return token.(string)
+	return subSchema, nil
 }
 
+// merge the root json schema and nested json schema
+func (e *Engine) merge(root model.JSONSchema, nested model.JSONSchema) model.JSONSchema {
+	result := model.JSONSchema{}
+
+	for key, val := range root {
+		if key == SpecialJSONField {
+			continue
+		}
+		result[key] = val
+	}
+
+	for key, val := range nested {
+		result[key] = val
+	}
+
+	return result
+}
+
+// create a new json schema based on the unmarshalled schema
+// - the new json schema should be care of the nested json schema in data field
+func (e *Engine) format(schema model.JSONSchema) (model.JSONSchema, error) {
+	// parse the nested json schema
+	nestedSchema, err := e.nested(schema)
+	if err != nil {
+		return nil, err
+	}
+
+	// merge the root schema and nested schema
+	return e.merge(schema, nestedSchema), nil
+}
+
+// parse the json message -> json schema -> cached table schema
 func (e *Engine) parse(m *kafka.Message) {
-	// decode the header
-	var header entity.Header
-	// unmarshal the data to State entity
-	if err := json.Unmarshal(m.Data, &header); err != nil {
-		fmt.Printf("unmarshal %v: %v\n", string(m.Data), err)
-		return
-	}
-	// check if the token is valid
-	if e.isValid(header.Key, header.Source) == false {
-		fmt.Printf("invalid token: %s, %v\n", m.Topic, string(m.Data))
+	schema := model.JSONSchema{}
+
+	// unmarshal the message to json schema
+	if err := json.Unmarshal(m.Data, &schema); err != nil {
+		fmt.Printf("unmarshal message %v: %v\n", string(m.Data), err)
 		return
 	}
 
-	// decode the message body into domain scheme
-	if m.Topic == topicState {
-		state, err := e.buildState(&header)
-		if err != nil {
-			fmt.Printf("build state: %v\n", err)
-			return
-		}
+	// create a new json schema based on the unmarshaled schema
+	newSchema, err := e.format(schema)
+	if err != nil {
+		fmt.Printf("format json schema %v: %v\n", string(m.Data), err)
+		return
+	}
 
-		// update the new state to slice buffer
-		if result := e.updateState(state); len(result) > 0 {
-			// if it needs to batch inserting, separate the channel operation out of lock condition
-			e.stream <- result
-		}
-	} else if m.Topic == topicMetric {
+	// get the data type value
+	dtype, exist := newSchema[DataTypeField]
+	if !exist {
+		fmt.Printf("json field %s is not found\n", DataTypeField)
+		return
+	}
 
+	// get the configuration schema by the data type
+	relation := e.consuler.GetSchema(dtype.(string))
+	if relation == nil {
+		fmt.Printf("relation schema for %v is not found\n", dtype)
+		return
+	}
+
+	// update the cache of table schemas
+	if err := e.update(newSchema, relation); err != nil {
+		fmt.Printf("update json schema %v: %v\n", string(m.Data), err)
+		return
+	}
+}
+
+func (e *Engine) newSchemasCarrier(table string) *model.SchemasCarrier {
+	return &model.SchemasCarrier{
+		Table:   table,
+		Schemas: make([]model.JSONSchema, 0, e.settings.Server.EngineBatch),
+	}
+}
+
+// update the cache of table schemas, if any data type reaches the threshold, append to channel
+func (e *Engine) update(schema model.JSONSchema, relation *model.Relation) error {
+	finalSchema := model.JSONSchema{}
+	// filter with schema and relation
+	for _, column := range relation.Columns {
+		v, ok := schema[column]
+		if !ok {
+			return fmt.Errorf("%s is missed", column)
+		}
+		finalSchema[column] = v
+	}
+
+	var buf *model.SchemasCarrier
+
+	e.cacheMux.Lock()
+	// update the cache with locker
+	carrier, ok := e.cache[relation.DataType]
+	if !ok {
+		// init the schemas carrier for data type
+		e.cache[relation.DataType] = e.newSchemasCarrier(carrier.Table)
 	} else {
-		fmt.Printf("invalid topic: %s, %v\n", m.Topic, string(m.Data))
+		// append the new schema to schemas carrier
+		carrier.Schemas = append(carrier.Schemas, finalSchema)
+
+		// check if the length of schemas reaches the threshold
+		if len(carrier.Schemas) == e.settings.Server.EngineBatch {
+			// buffer the schemas carrier
+			buf = carrier
+
+			// reset the schemas carrier
+			e.cache[relation.DataType] = e.newSchemasCarrier(carrier.Table)
+		}
+	}
+	e.cacheMux.Unlock()
+
+	// send the schemas carrier to channel for storage to batch insertion
+	if buf != nil {
+		e.stream <- buf
+	}
+
+	return nil
+}
+
+// flush the left data to storage
+func (e *Engine) flush() {
+	e.cacheMux.Lock()
+	defer e.cacheMux.Unlock()
+
+	// flush the left data to storage before exit
+	for key, carrier := range e.cache {
+		if len(carrier.Schemas) > 0 {
+			// buffer the schemas carrier
+			buf := carrier
+
+			// reset the schemas carrier
+			e.cache[key] = e.newSchemasCarrier(carrier.Table)
+
+			// send the schemas carrier to storage for batch insertion
+			e.stream <- buf
+		}
 	}
 }
 
@@ -154,19 +237,8 @@ func (e *Engine) afterCare() bool {
 		e.parse(m)
 
 	case <-time.After(time.Second * delay):
-		e.stateMux.Lock()
-		// flush the left data to storage before exit
-		if len(e.states) > 0 {
-			// buffer the old buffer
-			buf := e.states
-
-			// clear the old buffer
-			e.states = make([]domain.Schema, 0, e.settings.Server.EngineBatch)
-
-			// send the states to storage
-			e.stream <- buf
-		}
-		e.stateMux.Unlock()
+		// flush the unreached buffer to storage
+		e.flush()
 
 		return false
 	}
@@ -213,19 +285,8 @@ func (e *Engine) refresh(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-ticker.C:
-			e.stateMux.Lock()
 			// flush the unreached buffer to storage
-			if len(e.states) > 0 {
-				// buffer the old buffer
-				buf := e.states
-
-				// clear the old buffer
-				e.states = make([]domain.Schema, 0, e.settings.Server.EngineBatch)
-
-				// send the states to storage
-				e.stream <- buf
-			}
-			e.stateMux.Unlock()
+			e.flush()
 
 		case <-ctx.Done():
 			fmt.Printf("engine refresh goroutine exit\n")
@@ -247,7 +308,7 @@ func (e *Engine) Start(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // ReadMessages returns the messages from channel
-func (e *Engine) ReadMessages() <-chan []domain.Schema {
+func (e *Engine) ReadMessages() <-chan *model.SchemasCarrier {
 	return e.stream
 }
 
@@ -257,11 +318,4 @@ func (e *Engine) IsReady() {
 		<-e.ready
 	}
 	fmt.Println("engine goroutines are ready")
-}
-
-// Close releases the hard resources
-func (e *Engine) Close() {
-	if e.redisClient != nil {
-		e.redisClient.Close()
-	}
 }

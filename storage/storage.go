@@ -2,8 +2,8 @@ package storage
 
 import (
 	"TL-Data-Consumer/config"
-	"TL-Data-Consumer/domain"
 	"TL-Data-Consumer/engine"
+	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
 	"fmt"
@@ -15,11 +15,16 @@ import (
 )
 
 const (
-	defaultRoutinesNum  = 2
-	defaultWaitTime     = 5
-	defaultDelayTime    = 4
-	defaultMaxOpenConns = 20
-	defaultMaxIdleConns = 5
+	// DefaultRoutinesNum - routines number for inserting
+	DefaultRoutinesNum = 2
+	// DefaultWaitTime - sleep time for inserting when happens error with database
+	DefaultWaitTime = 5
+	// DefaultDelayTime - delay time for goroutines consuming the channel
+	DefaultDelayTime = 4
+	// DefaultMaxOpenConns - max open connections for database
+	DefaultMaxOpenConns = 20
+	// DefaultMaxIdleConns - max idle connections for database
+	DefaultMaxIdleConns = 5
 )
 
 var (
@@ -45,13 +50,13 @@ type Storage struct {
 // NewStorage returns a new storage for database insertion
 func NewStorage(settings *config.Config, engine *engine.Engine) *Storage {
 	if settings.Server.StorageRoutines == 0 {
-		settings.Server.StorageRoutines = defaultRoutinesNum
+		settings.Server.StorageRoutines = DefaultRoutinesNum
 	}
 	if settings.Server.StorageWaitTime == 0 {
-		settings.Server.StorageWaitTime = defaultWaitTime
+		settings.Server.StorageWaitTime = DefaultWaitTime
 	}
 	if settings.Server.StorageDelayTime == 0 {
-		settings.Server.StorageDelayTime = defaultDelayTime
+		settings.Server.StorageDelayTime = DefaultDelayTime
 	}
 
 	// init the database connections
@@ -66,8 +71,8 @@ func NewStorage(settings *config.Config, engine *engine.Engine) *Storage {
 	if err != nil {
 		panic(err)
 	}
-	db.SetMaxOpenConns(defaultMaxOpenConns)
-	db.SetMaxIdleConns(defaultMaxIdleConns)
+	db.SetMaxOpenConns(DefaultMaxOpenConns)
+	db.SetMaxIdleConns(DefaultMaxIdleConns)
 	if err := db.Ping(); err != nil {
 		panic(err)
 	}
@@ -86,9 +91,9 @@ func (s *Storage) afterCare() bool {
 	delay := (s.settings.Server.StorageDelayTime)
 
 	select {
-	case schemas := <-s.engine.ReadMessages():
+	case carrier := <-s.engine.ReadMessages():
 		// try to flush the schemas to the database
-		s.tryFlush(schemas)
+		s.tryFlush(carrier)
 
 	case <-time.After(time.Second * delay): // delay several seconds
 		return false
@@ -106,9 +111,9 @@ func (s *Storage) handle(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		// read from the messages channel
-		case schemas := <-s.engine.ReadMessages():
+		case carrier := <-s.engine.ReadMessages():
 			// try to flush the schemas to the database
-			s.tryFlush(schemas)
+			s.tryFlush(carrier)
 
 		case <-ctx.Done():
 			// if the cancel signal is received
@@ -132,10 +137,10 @@ func (s *Storage) Start(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // try to flush the schemas, if failed, sleep for a moment
-func (s *Storage) tryFlush(schemas []domain.Schema) {
+func (s *Storage) tryFlush(carrier *model.SchemasCarrier) {
 	for {
 		// flush the schemas to database
-		if err := s.flush(schemas); err != nil {
+		if err := s.flush(carrier); err != nil {
 			fmt.Printf("flush schemas: %v\n", err)
 
 			// sleep for a seconds and retry flush
@@ -144,25 +149,25 @@ func (s *Storage) tryFlush(schemas []domain.Schema) {
 		}
 
 		// update the total count of insertion
-		totalInsertCount.Add(float64(len(schemas)))
+		totalInsertCount.Add(float64(len(carrier.Schemas)))
 		break
 	}
 }
 
 // prepare the columns and values with statemetn
-func (s *Storage) prepare(tx *sql.Tx, schemas []domain.Schema) error {
+func (s *Storage) prepare(tx *sql.Tx, carrier *model.SchemasCarrier) error {
 	// retrieve the table name and columns
-	first := schemas[0]
+	first := carrier.Schemas[0]
 
 	// preapare a copy In statement with table and columns
-	stmt, err := tx.Prepare(pq.CopyIn(first.GetTable(), first.GetColumns()...))
+	stmt, err := tx.Prepare(pq.CopyIn(carrier.Table, first.GetColumns()...))
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 
 	// process each schema
-	for _, schema := range schemas {
+	for _, schema := range carrier.Schemas {
 		if _, err := stmt.Exec(schema.GetValues()...); err != nil {
 			return err
 		}
@@ -175,7 +180,7 @@ func (s *Storage) prepare(tx *sql.Tx, schemas []domain.Schema) error {
 }
 
 // flush the batch schemas into database
-func (s *Storage) flush(schemas []domain.Schema) error {
+func (s *Storage) flush(carrier *model.SchemasCarrier) error {
 	// begin a transaction
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -187,7 +192,7 @@ func (s *Storage) flush(schemas []domain.Schema) error {
 	defer tx.Rollback()
 
 	// prepare the columns and values with statement
-	if err := s.prepare(tx, schemas); err != nil {
+	if err := s.prepare(tx, carrier); err != nil {
 		return err
 	}
 

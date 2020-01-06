@@ -20,11 +20,10 @@ type DBStruct struct {
 
 // ServerStruct defines fields for main logic
 type ServerStruct struct {
-	Brokers   []string `yaml:"brokers"`
-	Topics    []string `yaml:"topics"`
-	Group     string   `yaml:"group"`
-	AdminAddr string   `yaml:"admin_addr"`
-
+	Brokers           []string      `yaml:"brokers"`
+	Topics            []string      `yaml:"topics"`
+	Group             string        `yaml:"group"`
+	AdminAddr         string        `yaml:"admin_addr"`
 	ConsumeRoutines   int           `yaml:"consume_routines"`
 	ConsumeBuffer     int           `yaml:"consume_buffer"`
 	EngineRoutines    int           `yaml:"engine_routines"`
@@ -37,17 +36,17 @@ type ServerStruct struct {
 	StorageWaitTime   time.Duration `yaml:"storage_wait_time"`
 }
 
-// RedisStruct defines fields for redis
-type RedisStruct struct {
-	Passwd string `yaml:"passwd"`
-	Addr   string `yaml:"addr"`
-	DB     int    `yaml:"db"`
+// ConsulStruct defines fields for consul
+type ConsulStruct struct {
+	Address     string        `yaml:"address"`
+	Directory   string        `yaml:"directory"`
+	RefreshTime time.Duration `yaml:"refresh_time"`
 }
 
 // Config structure for server
 type Config struct {
 	Server ServerStruct `yaml:"server"`
-	Redis  RedisStruct  `yaml:"redis"`
+	Consul ConsulStruct `yaml:"consul"`
 	DB     DBStruct     `yaml:"db"`
 }
 

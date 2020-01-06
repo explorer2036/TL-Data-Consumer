@@ -2,6 +2,7 @@ package main
 
 import (
 	"TL-Data-Consumer/config"
+	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/engine"
 	"TL-Data-Consumer/kafka"
 	"TL-Data-Consumer/server"
@@ -28,14 +29,19 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
+	// create consul for loading configuration from consul
+	consuler := consul.NewConsul(&settings)
 	// create consumer for reading from kafka
 	consumer := kafka.NewConsumer(&settings)
 	// create engine for handling messages
-	enginer := engine.NewEngine(&settings, consumer)
+	enginer := engine.NewEngine(&settings, consumer, consuler)
 	// create storage for batch inserting data to database
 	storager := storage.NewStorage(&settings, enginer)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// start the goroutines to refresh the configuration from consul
+	consuler.Start(ctx, &wg)
+
 	// start the goroutines to batch insert records to database
 	storager.Start(ctx, &wg)
 	storager.IsReady()
@@ -73,8 +79,6 @@ func main() {
 			wg.Wait()
 
 			// release the hard resources, like redis or databases
-			enginer.Close()
-
 			storager.Close()
 
 			fmt.Printf("shut down takes time: %v\n", time.Now().Sub(start))
