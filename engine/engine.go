@@ -234,7 +234,8 @@ func (e *Engine) update(schema model.JSONSchema, relation *model.Relation, actio
 		carrier, ok := e.cache[relation.DataType]
 		if !ok {
 			// init the schemas carrier for data type
-			e.cache[relation.DataType] = e.newSchemasCarrier(relation.DataType, relation.Table, action)
+			carrier = e.newSchemasCarrier(relation.DataType, relation.Table, action)
+			e.cache[relation.DataType] = carrier
 		}
 		// append the new schema to schemas carrier
 		carrier.Schemas = append(carrier.Schemas, finalSchema)
