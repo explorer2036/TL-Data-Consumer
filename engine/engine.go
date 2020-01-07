@@ -64,6 +64,7 @@ func NewEngine(settings *config.Config, consumer *kafka.Consumer, consuler *cons
 	return &Engine{
 		settings: settings,
 		consumer: consumer,
+		consuler: consuler,
 		cache:    make(map[string]*model.SchemasCarrier),
 		ready:    make(chan struct{}, settings.Server.EngineRoutines),
 		stream:   make(chan *model.SchemasCarrier, settings.Server.EngineBuffer),
@@ -182,7 +183,7 @@ func (e *Engine) update(schema model.JSONSchema, relation *model.Relation) error
 	carrier, ok := e.cache[relation.DataType]
 	if !ok {
 		// init the schemas carrier for data type
-		e.cache[relation.DataType] = e.newSchemasCarrier(carrier.Table)
+		e.cache[relation.DataType] = e.newSchemasCarrier(relation.Table)
 	} else {
 		// append the new schema to schemas carrier
 		carrier.Schemas = append(carrier.Schemas, finalSchema)

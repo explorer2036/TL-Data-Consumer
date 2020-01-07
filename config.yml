@@ -23,9 +23,9 @@ server:
 db:
   user: "postgres" # the username for database
   passwd: "123456" # the passwd for database
-  host: "192.168.0.13" # the host for database
+  host: "192.168.0.4" # the host for database
   port: "5432" # the port for database
-  name: "consumer" # the database name
+  name: "postgres" # the database name
 
 consul:
   address: "192.168.0.4:8500" # consul address for client api
