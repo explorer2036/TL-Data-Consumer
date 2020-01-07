@@ -36,7 +36,7 @@ func main() {
 	// create engine for handling messages
 	enginer := engine.NewEngine(&settings, consumer, consuler)
 	// create storage for batch inserting data to database
-	storager := storage.NewStorage(&settings, enginer)
+	storager := storage.NewStorage(&settings, enginer, consuler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// start the goroutines to refresh the configuration from consul

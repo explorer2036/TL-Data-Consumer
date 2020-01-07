@@ -2,11 +2,13 @@ package storage
 
 import (
 	"TL-Data-Consumer/config"
+	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/engine"
 	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,15 +42,15 @@ func init() {
 
 // Storage represents the database insertion
 type Storage struct {
-	settings *config.Config
-
-	db     *sql.DB        // database connection pool
-	engine *engine.Engine // the engine object
-	ready  chan struct{}  // mark the storage is ready
+	consuler *consul.Consul // consul for getting the fixed columns
+	engine   *engine.Engine // the engine object
+	settings *config.Config // the settings for storage
+	db       *sql.DB        // database connection pool
+	ready    chan struct{}  // mark the storage is ready
 }
 
 // NewStorage returns a new storage for database insertion
-func NewStorage(settings *config.Config, engine *engine.Engine) *Storage {
+func NewStorage(settings *config.Config, engine *engine.Engine, consuler *consul.Consul) *Storage {
 	if settings.Server.StorageRoutines == 0 {
 		settings.Server.StorageRoutines = DefaultRoutinesNum
 	}
@@ -78,6 +80,7 @@ func NewStorage(settings *config.Config, engine *engine.Engine) *Storage {
 	}
 
 	return &Storage{
+		consuler: consuler,
 		engine:   engine,
 		db:       db,
 		settings: settings,
@@ -154,8 +157,110 @@ func (s *Storage) tryFlush(carrier *model.SchemasCarrier) {
 	}
 }
 
-// prepare the columns and values with statemetn
-func (s *Storage) prepare(tx *sql.Tx, carrier *model.SchemasCarrier) error {
+// split the json schema to set schema and where schema
+func (s *Storage) splitSchema(schema model.JSONSchema, dataType string) (model.JSONSchema, model.JSONSchema) {
+	set := model.JSONSchema{}
+
+	// the columns for where
+	columns := s.consuler.GetSchema(dataType).Columns
+
+	// define the search function
+	search := func(keys []string, key string) bool {
+		for _, k := range keys {
+			if k == key {
+				return true
+			}
+		}
+		return false
+	}
+
+	where := model.JSONSchema{}
+	// init the set and where json schema
+	for key, val := range schema {
+		if search(columns, key) == true {
+			where[key] = val
+		} else {
+			set[key] = val
+		}
+	}
+
+	return set, where
+}
+
+// format the update sql and args with set and where schemas
+func (s *Storage) formatUpdateSQL(table string, set model.JSONSchema, where model.JSONSchema) (string, []interface{}) {
+	var offset int
+	// get the sorted keys and values for set
+	setKeys := set.GetColumns()
+	setVals := set.GetValues()
+
+	// get the sorted keys and values for where
+	whereKeys := where.GetColumns()
+	whereVals := where.GetValues()
+
+	offset++
+	// init the begin sql
+	begin := "UPDATE " + table + " SET"
+
+	middle := " "
+	// init the middle sql
+	for _, key := range setKeys {
+		middle = middle + fmt.Sprintf("%s = $%d,", key, offset)
+		offset++
+	}
+	middle = strings.TrimRight(middle, ",")
+
+	// init the end sql
+	end := " WHERE "
+	for _, key := range whereKeys {
+		end = end + fmt.Sprintf("%s = $%d AND ", key, offset)
+		offset++
+	}
+	end = strings.TrimRight(end, " AND ")
+
+	// combine the begin, middle, end sql
+	query := begin + middle + end
+
+	var args []interface{}
+	args = append(args, setVals...)
+	args = append(args, whereVals...)
+
+	return query, args
+}
+
+// prepare the columns and values with statement for updation
+func (s *Storage) prepareUpdation(tx *sql.Tx, carrier *model.SchemasCarrier) error {
+	// loop the schemas to do updation
+	for _, schema := range carrier.Schemas {
+		// get the set and where schema
+		set, where := s.splitSchema(schema, carrier.DataType)
+		if len(set) == 0 {
+			return fmt.Errorf("set schema are empty for %s", carrier.Table)
+		}
+		if len(where) == 0 {
+			return fmt.Errorf("where schema are empty for %s", carrier.Table)
+		}
+
+		// prepare the update sql and args
+		query, args := s.formatUpdateSQL(carrier.Table, set, where)
+
+		// prepare a statement with query sql
+		stmt, err := tx.Prepare(query)
+		if err != nil {
+			return err
+		}
+
+		// execute the statement with args
+		if _, err := stmt.Exec(args...); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// prepare the columns and values with statement for insertion
+func (s *Storage) prepareInsertion(tx *sql.Tx, carrier *model.SchemasCarrier) error {
 	// retrieve the table name and columns
 	first := carrier.Schemas[0]
 
@@ -191,9 +296,18 @@ func (s *Storage) flush(carrier *model.SchemasCarrier) error {
 	// 2. for nothing after commit, it close the transaction
 	defer tx.Rollback()
 
-	// prepare the columns and values with statement
-	if err := s.prepare(tx, carrier); err != nil {
-		return err
+	// prepare the columns and values with statement for insertion
+	if carrier.Action == model.InsertAction {
+		if err := s.prepareInsertion(tx, carrier); err != nil {
+			return err
+		}
+	}
+
+	// prepare the columns and values with statement for updation
+	if carrier.Action == model.UpdateAction {
+		if err := s.prepareUpdation(tx, carrier); err != nil {
+			return err
+		}
 	}
 
 	// commit the transaction

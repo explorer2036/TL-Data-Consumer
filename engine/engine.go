@@ -27,8 +27,10 @@ const (
 
 	// SpecialJSONField - the json field uses for nested parsing
 	SpecialJSONField = "data"
-	// DataTypeField - the json field represents for different type of messages
-	DataTypeField = "dtype"
+	// JSONDataTypeField - the json field represents for different type of messages
+	JSONDataTypeField = "dtype"
+	// JSONActionField - the json field represents for different operation
+	JSONActionField = "action"
 )
 
 // Engine represents the pipeline for handling messages
@@ -119,6 +121,28 @@ func (e *Engine) format(schema model.JSONSchema) (model.JSONSchema, error) {
 	return e.merge(schema, nestedSchema), nil
 }
 
+// get json field's value
+func (e *Engine) getJSONField(schema model.JSONSchema, name string) (string, error) {
+	// get the value of the field name
+	value, exist := schema[name]
+	if !exist {
+		return "", fmt.Errorf("%s is not found", name)
+	}
+
+	// check if the field type is string
+	if reflect.TypeOf(value).Kind() != reflect.String {
+		return "", fmt.Errorf("invalid type for %s", name)
+	}
+
+	// check if the value is empty
+	s := value.(string)
+	if s == "" {
+		return "", fmt.Errorf("value for %s is empty", name)
+	}
+
+	return s, nil
+}
+
 // parse the json message -> json schema -> cached table schema
 func (e *Engine) parse(m *kafka.Message) {
 	schema := model.JSONSchema{}
@@ -136,36 +160,50 @@ func (e *Engine) parse(m *kafka.Message) {
 		return
 	}
 
-	// get the data type value
-	dtype, exist := newSchema[DataTypeField]
-	if !exist {
-		fmt.Printf("json field %s is not found\n", DataTypeField)
+	// get the value of json filed 'dtype'
+	dataType, err := e.getJSONField(newSchema, JSONDataTypeField)
+	if err != nil {
+		fmt.Printf("get json field: %v\n", err)
+		return
+	}
+
+	// get the value of json field 'action'
+	action, err := e.getJSONField(newSchema, JSONActionField)
+	if err != nil {
+		fmt.Printf("get json field: %v\n", err)
+		return
+	}
+	if action != model.InsertAction && action != model.UpdateAction {
+		fmt.Printf("invalid action: %s\n", action)
 		return
 	}
 
 	// get the configuration schema by the data type
-	relation := e.consuler.GetSchema(dtype.(string))
+	relation := e.consuler.GetSchema(dataType)
 	if relation == nil {
-		fmt.Printf("relation schema for %v is not found\n", dtype)
+		fmt.Printf("relation schema for %v is not found\n", dataType)
 		return
 	}
 
 	// update the cache of table schemas
-	if err := e.update(newSchema, relation); err != nil {
+	if err := e.update(newSchema, relation, action); err != nil {
 		fmt.Printf("update json schema %v: %v\n", string(m.Data), err)
 		return
 	}
 }
 
-func (e *Engine) newSchemasCarrier(table string) *model.SchemasCarrier {
+// new a schemas carrier based on the table name and action
+func (e *Engine) newSchemasCarrier(dataType string, table string, action string) *model.SchemasCarrier {
 	return &model.SchemasCarrier{
-		Table:   table,
-		Schemas: make([]model.JSONSchema, 0, e.settings.Server.EngineBatch),
+		DataType: dataType,
+		Table:    table,
+		Action:   action,
+		Schemas:  make([]model.JSONSchema, 0, e.settings.Server.EngineBatch),
 	}
 }
 
 // update the cache of table schemas, if any data type reaches the threshold, append to channel
-func (e *Engine) update(schema model.JSONSchema, relation *model.Relation) error {
+func (e *Engine) update(schema model.JSONSchema, relation *model.Relation, action string) error {
 	finalSchema := model.JSONSchema{}
 	// filter with schema and relation
 	for _, column := range relation.Columns {
@@ -176,32 +214,45 @@ func (e *Engine) update(schema model.JSONSchema, relation *model.Relation) error
 		finalSchema[column] = v
 	}
 
-	var buf *model.SchemasCarrier
+	// if ready isn't nil, it represents sending the schemas carrier to storage
+	var ready *model.SchemasCarrier
 
-	e.cacheMux.Lock()
-	// update the cache with locker
-	carrier, ok := e.cache[relation.DataType]
-	if !ok {
-		// init the schemas carrier for data type
-		e.cache[relation.DataType] = e.newSchemasCarrier(relation.Table)
-	} else {
+	// handle the update action, without slice buffer
+	if action == model.UpdateAction {
+		e.cacheMux.Lock()
+		// new a schemas carrier for update action
+		ready = e.newSchemasCarrier(relation.DataType, relation.Table, action)
+		// append the new schema to schemas carrier
+		ready.Schemas = append(ready.Schemas, finalSchema)
+		e.cacheMux.Unlock()
+	}
+
+	// handle the insert action
+	if action == model.InsertAction {
+		e.cacheMux.Lock()
+		// update the cache with locker
+		carrier, ok := e.cache[relation.DataType]
+		if !ok {
+			// init the schemas carrier for data type
+			e.cache[relation.DataType] = e.newSchemasCarrier(relation.DataType, relation.Table, action)
+		}
 		// append the new schema to schemas carrier
 		carrier.Schemas = append(carrier.Schemas, finalSchema)
 
 		// check if the length of schemas reaches the threshold
 		if len(carrier.Schemas) == e.settings.Server.EngineBatch {
 			// buffer the schemas carrier
-			buf = carrier
+			ready = carrier
 
 			// reset the schemas carrier
-			e.cache[relation.DataType] = e.newSchemasCarrier(carrier.Table)
+			e.cache[relation.DataType] = e.newSchemasCarrier(relation.DataType, relation.Table, action)
 		}
+		e.cacheMux.Unlock()
 	}
-	e.cacheMux.Unlock()
 
 	// send the schemas carrier to channel for storage to batch insertion
-	if buf != nil {
-		e.stream <- buf
+	if ready != nil {
+		e.stream <- ready
 	}
 
 	return nil
@@ -219,7 +270,7 @@ func (e *Engine) flush() {
 			buf := carrier
 
 			// reset the schemas carrier
-			e.cache[key] = e.newSchemasCarrier(carrier.Table)
+			e.cache[key] = e.newSchemasCarrier(carrier.DataType, carrier.Table, carrier.Action)
 
 			// send the schemas carrier to storage for batch insertion
 			e.stream <- buf

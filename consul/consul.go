@@ -172,11 +172,11 @@ func (c *Consul) Start(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // GetSchema returns the schema for data type
-func (c *Consul) GetSchema(dtype string) *model.Relation {
+func (c *Consul) GetSchema(dataType string) *model.Relation {
 	c.schemaMux.RLock()
 	defer c.schemaMux.RUnlock()
 
-	if schema, ok := c.schemas[dtype]; ok {
+	if schema, ok := c.schemas[dataType]; ok {
 		return schema
 	}
 	return nil

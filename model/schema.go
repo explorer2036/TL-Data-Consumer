@@ -2,6 +2,13 @@ package model
 
 import "sort"
 
+const (
+	// InsertAction - the "insert" action
+	InsertAction = "insert"
+	// UpdateAction - the "update" action
+	UpdateAction = "update"
+)
+
 // database schema configuration in consul
 //
 // fixed_columns: ["userid", "source", "path"]
@@ -53,6 +60,8 @@ func (s JSONSchema) GetValues() []interface{} {
 
 // SchemasCarrier defines the transfer structure for engine and storage
 type SchemasCarrier struct {
-	Table   string
-	Schemas []JSONSchema
+	DataType string       // the data type
+	Table    string       // the table name
+	Action   string       // the action
+	Schemas  []JSONSchema // the json schemas
 }
