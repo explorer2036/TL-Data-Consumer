@@ -34,10 +34,16 @@ var (
 		Name: "total_insert_count",
 		Help: "The total count of insert into database",
 	})
+
+	totalUpdateCount = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "total_update_count",
+		Help: "The total count of update into database",
+	})
 )
 
 func init() {
 	prometheus.MustRegister(totalInsertCount)
+	prometheus.MustRegister(totalUpdateCount)
 }
 
 // Storage represents the database insertion
@@ -254,6 +260,9 @@ func (s *Storage) prepareUpdation(tx *sql.Tx, carrier *model.SchemasCarrier) err
 		if _, err := stmt.Exec(args...); err != nil {
 			return err
 		}
+
+		// update the metric for updation operation
+		totalUpdateCount.Add(1)
 	}
 
 	return nil
