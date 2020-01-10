@@ -2,8 +2,8 @@ package kafka
 
 import (
 	"TL-Data-Consumer/config"
+	"TL-Data-Consumer/log"
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -147,7 +147,7 @@ func (c *Consumer) handle(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		// try to fetch messages from kafka
 		if err := client.Consume(ctx, topics, &handler); err != nil {
-			fmt.Printf("restart consumer topics(%v), group(%s): %v\n", topics, group, err)
+			log.Infof("restart consumer topics(%v), group(%s): %v", topics, group, err)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -155,7 +155,7 @@ func (c *Consumer) handle(ctx context.Context, wg *sync.WaitGroup) {
 		select {
 		// receive a canceled signal
 		case <-ctx.Done():
-			fmt.Println("consumer goroutine exit")
+			log.Info("consumer goroutine exit")
 			return
 		default:
 		}
@@ -167,5 +167,5 @@ func (c *Consumer) IsReady() {
 	for i := 0; i < c.settings.Server.ConsumeRoutines; i++ {
 		<-c.ready
 	}
-	fmt.Println("consumer goroutines are ready")
+	log.Info("consumer goroutines are ready")
 }

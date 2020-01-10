@@ -4,6 +4,7 @@ import (
 	"TL-Data-Consumer/config"
 	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/kafka"
+	"TL-Data-Consumer/log"
 	"TL-Data-Consumer/model"
 	"context"
 	"encoding/json"
@@ -149,45 +150,45 @@ func (e *Engine) parse(m *kafka.Message) {
 
 	// unmarshal the message to json schema
 	if err := json.Unmarshal(m.Data, &schema); err != nil {
-		fmt.Printf("unmarshal message %v: %v\n", string(m.Data), err)
+		log.Infof("unmarshal message %v: %v", string(m.Data), err)
 		return
 	}
 
 	// create a new json schema based on the unmarshaled schema
 	newSchema, err := e.format(schema)
 	if err != nil {
-		fmt.Printf("format json schema %v: %v\n", string(m.Data), err)
+		log.Infof("format json schema %v: %v", string(m.Data), err)
 		return
 	}
 
 	// get the value of json filed 'dtype'
 	dataType, err := e.getJSONField(newSchema, JSONDataTypeField)
 	if err != nil {
-		fmt.Printf("get json field: %v\n", err)
+		log.Infof("get json field: %v", err)
 		return
 	}
 
 	// get the value of json field 'action'
 	action, err := e.getJSONField(newSchema, JSONActionField)
 	if err != nil {
-		fmt.Printf("get json field: %v\n", err)
+		log.Infof("get json field: %v", err)
 		return
 	}
 	if action != model.InsertAction && action != model.UpdateAction {
-		fmt.Printf("invalid action: %s\n", action)
+		log.Infof("invalid action: %s", action)
 		return
 	}
 
 	// get the configuration schema by the data type
 	relation := e.consuler.GetSchema(dataType)
 	if relation == nil {
-		fmt.Printf("relation schema for %v is not found\n", dataType)
+		log.Infof("relation schema for %v is not found", dataType)
 		return
 	}
 
 	// update the cache of table schemas
 	if err := e.update(newSchema, relation, action); err != nil {
-		fmt.Printf("update json schema %v: %v\n", string(m.Data), err)
+		log.Infof("update json schema %v: %v", string(m.Data), err)
 		return
 	}
 }
@@ -318,7 +319,7 @@ func (e *Engine) handle(ctx context.Context, wg *sync.WaitGroup) {
 			// try to handle the left data, and push the buffered schemas
 			for {
 				if e.afterCare() == false {
-					fmt.Println("engine goroutine exit")
+					log.Info("engine goroutine exit")
 					return
 				}
 			}
@@ -342,7 +343,7 @@ func (e *Engine) refresh(ctx context.Context, wg *sync.WaitGroup) {
 			e.flush()
 
 		case <-ctx.Done():
-			fmt.Printf("engine refresh goroutine exit\n")
+			log.Infof("engine refresh goroutine exit")
 			return
 		}
 	}
@@ -370,5 +371,5 @@ func (e *Engine) IsReady() {
 	for i := 0; i < e.settings.Server.EngineRoutines; i++ {
 		<-e.ready
 	}
-	fmt.Println("engine goroutines are ready")
+	log.Info("engine goroutines are ready")
 }

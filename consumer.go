@@ -5,17 +5,34 @@ import (
 	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/engine"
 	"TL-Data-Consumer/kafka"
+	"TL-Data-Consumer/log"
 	"TL-Data-Consumer/server"
 	"TL-Data-Consumer/storage"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
 )
+
+// updateOptions updates the log options
+func updateOptions(scope string, options *log.Options, settings *config.Config) error {
+	options.RotateOutputPath = settings.Log.RotationPath
+	options.RotationMaxBackups = settings.Log.RotationMaxBackups
+	options.RotationMaxSize = settings.Log.RotationMaxSize
+	options.RotationMaxAge = settings.Log.RotationMaxAge
+	options.JSONEncoding = settings.Log.JSONEncoding
+	level, err := options.ConvertLevel(settings.Log.OutputLevel)
+	if err != nil {
+		return err
+	}
+	options.SetOutputLevel(scope, level)
+	options.SetLogCallers(scope, true)
+
+	return nil
+}
 
 func main() {
 	var settings config.Config
@@ -25,6 +42,16 @@ func main() {
 	}
 	// check if some fields value in config file is valid
 	if err := settings.Check(); err != nil {
+		panic(err)
+	}
+
+	// init and update the log options
+	logOptions := log.DefaultOptions()
+	if err := updateOptions("default", logOptions, &settings); err != nil {
+		panic(err)
+	}
+	// configure the log options
+	if err := log.Configure(logOptions); err != nil {
 		panic(err)
 	}
 
@@ -58,7 +85,7 @@ func main() {
 	admin := server.NewServer(&settings)
 	admin.Start(&wg)
 
-	fmt.Println("data consumer is started")
+	log.Info("data consumer is started")
 
 	sig := make(chan os.Signal, 1024)
 	// subscribe signals: SIGINT & SINGTERM
@@ -66,7 +93,7 @@ func main() {
 	for {
 		select {
 		case s := <-sig:
-			fmt.Printf("receive signal: %v\n", s)
+			log.Infof("receive signal: %v", s)
 
 			start := time.Now()
 			// cancel the consumer goroutines
@@ -81,7 +108,7 @@ func main() {
 			// release the hard resources, like redis or databases
 			storager.Close()
 
-			fmt.Printf("shut down takes time: %v\n", time.Now().Sub(start))
+			log.Infof("shut down takes time: %v", time.Now().Sub(start))
 			return
 		}
 	}

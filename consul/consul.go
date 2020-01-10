@@ -2,6 +2,7 @@ package consul
 
 import (
 	"TL-Data-Consumer/config"
+	"TL-Data-Consumer/log"
 	"TL-Data-Consumer/model"
 	"context"
 	"errors"
@@ -154,11 +155,11 @@ func (c *Consul) refresh(ctx context.Context, wg *sync.WaitGroup) {
 		case <-ticker.C:
 			// try to load and update the database schemas
 			if err := c.update(); err != nil {
-				fmt.Printf("refresh the database schemas: %v\n", err)
+				log.Infof("refresh the database schemas: %v", err)
 			}
 
 		case <-ctx.Done():
-			fmt.Printf("consul refresh goroutine exit\n")
+			log.Info("consul refresh goroutine exit")
 			return
 		}
 	}

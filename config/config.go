@@ -43,11 +43,23 @@ type ConsulStruct struct {
 	RefreshTime time.Duration `yaml:"refresh_time"`
 }
 
+// LogStruct defines fields for log
+type LogStruct struct {
+	OutputLevel        string `yaml:"output_level"`
+	OutputPath         string `yaml:"output_path"`
+	RotationPath       string `yaml:"rotation_path"`
+	RotationMaxSize    int    `yaml:"rotation_max_size"`
+	RotationMaxAge     int    `yaml:"rotation_max_age"`
+	RotationMaxBackups int    `yaml:"rotation_max_backups"`
+	JSONEncoding       bool   `yaml:"json_encoding"`
+}
+
 // Config structure for server
 type Config struct {
 	Server ServerStruct `yaml:"server"`
 	Consul ConsulStruct `yaml:"consul"`
 	DB     DBStruct     `yaml:"db"`
+	Log    LogStruct    `yaml:"log"`
 }
 
 // ParseYamlFile the config file

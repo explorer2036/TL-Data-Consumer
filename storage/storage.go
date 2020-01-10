@@ -4,6 +4,7 @@ import (
 	"TL-Data-Consumer/config"
 	"TL-Data-Consumer/consul"
 	"TL-Data-Consumer/engine"
+	"TL-Data-Consumer/log"
 	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
@@ -129,7 +130,7 @@ func (s *Storage) handle(ctx context.Context, wg *sync.WaitGroup) {
 			// try to handle the left data, and push the buffered schemas
 			for {
 				if s.afterCare() == false {
-					fmt.Println("storage goroutine exit")
+					log.Info("storage goroutine exit")
 					return
 				}
 			}
@@ -150,7 +151,7 @@ func (s *Storage) tryFlush(carrier *model.SchemasCarrier) {
 	for {
 		// flush the schemas to database
 		if err := s.flush(carrier); err != nil {
-			fmt.Printf("flush schemas: %v\n", err)
+			log.Infof("flush schemas: %v", err)
 
 			// sleep for a seconds and retry flush
 			time.Sleep(s.settings.Server.StorageWaitTime * time.Second)
@@ -328,7 +329,7 @@ func (s *Storage) IsReady() {
 	for i := 0; i < s.settings.Server.StorageRoutines; i++ {
 		<-s.ready
 	}
-	fmt.Println("storage goroutines are ready")
+	log.Info("storage goroutines are ready")
 }
 
 // Close releases the hard resources

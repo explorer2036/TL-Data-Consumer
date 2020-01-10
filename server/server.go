@@ -3,7 +3,6 @@ package server
 import (
 	"TL-Data-Consumer/config"
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/pprof"
 	"sync"
@@ -61,7 +60,6 @@ func (s *Server) Start(wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		if err := s.server.ListenAndServe(); err != nil {
-			fmt.Printf("%v\n", err)
 			return
 		}
 	}()
