@@ -8,6 +8,7 @@ import (
 	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,6 +29,11 @@ const (
 	DefaultMaxOpenConns = 20
 	// DefaultMaxIdleConns - max idle connections for database
 	DefaultMaxIdleConns = 5
+)
+
+var (
+	// ErrorBatchInsertion - it happens error when batch insertion
+	ErrorBatchInsertion = errors.New("database error for batch insertion")
 )
 
 var (
