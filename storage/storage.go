@@ -8,7 +8,6 @@ import (
 	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -29,11 +28,6 @@ const (
 	DefaultMaxOpenConns = 20
 	// DefaultMaxIdleConns - max idle connections for database
 	DefaultMaxIdleConns = 5
-)
-
-var (
-	// ErrorBatchInsertion - it happens error when batch insertion
-	ErrorBatchInsertion = errors.New("database error for batch insertion")
 )
 
 var (
@@ -157,11 +151,29 @@ func (s *Storage) tryFlush(carrier *model.SchemasCarrier) {
 	for {
 		// flush the schemas to database
 		if err := s.flush(carrier); err != nil {
-			log.Infof("flush schemas: %v", err)
+			log.Errorf("flush schemas: %v", err)
 
-			// sleep for a seconds and retry flush
-			time.Sleep(s.settings.Server.StorageWaitTime * time.Second)
-			continue
+			// 1. if it happens database error, try flush again
+			if strings.Contains(err.Error(), "connection refused") {
+				// sleep for a seconds and retry flush
+				time.Sleep(s.settings.Server.StorageWaitTime * time.Second)
+				continue
+			}
+
+			// 2. if it happens batch insertion error, try to insert one by one
+			if carrier.Action == model.InsertAction {
+				for _, schema := range carrier.Schemas {
+					if err := s.insertion(carrier.Table, schema); err != nil {
+						log.Errorf("insertion %v: %v", schema, err)
+						continue
+					}
+				}
+			}
+
+			// 3. if it happens updation error, output the error log
+			if carrier.Action == model.UpdateAction {
+				log.Errorf("updation %v: %v", carrier.Schemas, err)
+			}
 		}
 
 		// update the total count of insertion
@@ -242,7 +254,7 @@ func (s *Storage) formatUpdateSQL(table string, set model.JSONSchema, where mode
 }
 
 // prepare the columns and values with statement for updation
-func (s *Storage) prepareUpdation(tx *sql.Tx, carrier *model.SchemasCarrier) error {
+func (s *Storage) updation(tx *sql.Tx, carrier *model.SchemasCarrier) error {
 	// loop the schemas to do updation
 	for _, schema := range carrier.Schemas {
 		// get the set and where schema
@@ -275,8 +287,48 @@ func (s *Storage) prepareUpdation(tx *sql.Tx, carrier *model.SchemasCarrier) err
 	return nil
 }
 
-// prepare the columns and values with statement for insertion
-func (s *Storage) prepareInsertion(tx *sql.Tx, carrier *model.SchemasCarrier) error {
+// prepare the statement for insertion
+func (s *Storage) statement(tx *sql.Tx, table string, schema model.JSONSchema) error {
+	// preapare a copy In statement with table and columns
+	stmt, err := tx.Prepare(pq.CopyIn(table, schema.GetColumns()...))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	// process the schema
+	if _, err := stmt.Exec(schema.GetValues()...); err != nil {
+		return err
+	}
+	if _, err := stmt.Exec(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// insert the schema to database
+func (s *Storage) insertion(table string, schema model.JSONSchema) error {
+	// begin a transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	// 1. for error before commit, it rollback to the origin state
+	// 2. for nothing after commit, it close the transaction
+	defer tx.Rollback()
+
+	// prepare the statement for the insertion
+	if err := s.statement(tx, table, schema); err != nil {
+		return err
+	}
+
+	// commit the transaction
+	return tx.Commit()
+}
+
+// prepare the columns and values with statement for batch insertion
+func (s *Storage) batchInsertion(tx *sql.Tx, carrier *model.SchemasCarrier) error {
 	// retrieve the table name and columns
 	first := carrier.Schemas[0]
 
@@ -314,14 +366,14 @@ func (s *Storage) flush(carrier *model.SchemasCarrier) error {
 
 	// prepare the columns and values with statement for insertion
 	if carrier.Action == model.InsertAction {
-		if err := s.prepareInsertion(tx, carrier); err != nil {
+		if err := s.batchInsertion(tx, carrier); err != nil {
 			return err
 		}
 	}
 
 	// prepare the columns and values with statement for updation
 	if carrier.Action == model.UpdateAction {
-		if err := s.prepareUpdation(tx, carrier); err != nil {
+		if err := s.updation(tx, carrier); err != nil {
 			return err
 		}
 	}
