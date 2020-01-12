@@ -8,6 +8,7 @@ CREATE TABLE metric (
 	time TIMESTAMPTZ NOT NULL,
 	timestamp TIMESTAMPTZ NOT NULL,
 )
+
 CREATE TABLE state (
 	userid VARCHAR(100) NOT NULL,
 	source VARCHAR(100) NOT NULL,

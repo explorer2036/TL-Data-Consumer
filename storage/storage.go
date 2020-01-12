@@ -187,7 +187,7 @@ func (s *Storage) splitSchema(schema model.JSONSchema, dataType string) (model.J
 	set := model.JSONSchema{}
 
 	// the columns for where
-	columns := s.consuler.GetSchema(dataType).Columns
+	columns := s.consuler.GetSchema(dataType).Common
 
 	// define the search function
 	search := func(keys []string, key string) bool {

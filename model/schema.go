@@ -24,7 +24,9 @@ const (
 type Relation struct {
 	DataType string   `yaml:"dtype"`
 	Table    string   `yaml:"table"`
-	Columns  []string `yaml:"columns"`
+	Columns  []string `yaml:"columns"` // all columns for different type of data
+
+	Common []string // fixed columns for different type of data
 }
 
 // TableSchemas reflects the schema configuration from consul to table schema

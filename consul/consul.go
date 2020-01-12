@@ -105,6 +105,7 @@ func (c *Consul) parse(pairs api.KVPairs) error {
 				DataType: relation.DataType,
 				Table:    relation.Table,
 				Columns:  columns,
+				Common:   s.Columns,
 			}
 		}
 	}
