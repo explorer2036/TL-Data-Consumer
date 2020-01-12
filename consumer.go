@@ -19,7 +19,12 @@ import (
 
 // updateOptions updates the log options
 func updateOptions(scope string, options *log.Options, settings *config.Config) error {
-	options.RotateOutputPath = settings.Log.RotationPath
+	if settings.Log.OutputPath != "" {
+		options.OutputPaths = []string{settings.Log.OutputPath}
+	}
+	if settings.Log.RotationPath != "" {
+		options.RotateOutputPath = settings.Log.RotationPath
+	}
 	options.RotationMaxBackups = settings.Log.RotationMaxBackups
 	options.RotationMaxSize = settings.Log.RotationMaxSize
 	options.RotationMaxAge = settings.Log.RotationMaxAge

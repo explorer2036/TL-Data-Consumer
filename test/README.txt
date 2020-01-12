@@ -18,6 +18,14 @@ CREATE TABLE state (
 	timestamp TIMESTAMPTZ NOT NULL,
 )
 
+CREATE TABLE heartbeat (
+	userid VARCHAR(100) NOT NULL,
+	source VARCHAR(100) NOT NULL,
+	path VARCHAR(200) NOT NULL,
+	status VARCHAR(4) NOT NULL,
+	timestamp TIMESTAMPTZ NOT NULL,
+)
+
 fixed_columns: ["userid", "source", "path", "time", "timestamp"]
 relations:
   - dtype: "data_metric"
