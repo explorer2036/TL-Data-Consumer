@@ -8,6 +8,7 @@ import (
 	"TL-Data-Consumer/model"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,6 +29,11 @@ const (
 	DefaultMaxOpenConns = 20
 	// DefaultMaxIdleConns - max idle connections for database
 	DefaultMaxIdleConns = 5
+)
+
+var (
+	// ErrorNoAffected - no affected lines for for updation
+	ErrorNoAffected = errors.New("no affected lines for updation")
 )
 
 var (
@@ -172,7 +178,17 @@ func (s *Storage) tryFlush(carrier *model.SchemasCarrier) {
 
 			// 3. if it happens updation error, output the error log
 			if carrier.Action == model.UpdateAction {
-				log.Errorf("updation %v: %v", carrier.Schemas, err)
+				// no affected rows for updation, try to insert the data
+				if err == ErrorNoAffected {
+					for _, schema := range carrier.Schemas {
+						if err := s.insertion(carrier.Table, schema); err != nil {
+							log.Errorf("insertion %v: %v", schema, err)
+							continue
+						}
+					}
+				} else {
+					log.Errorf("updation %v: %v", carrier.Schemas, err)
+				}
 			}
 		}
 
@@ -276,12 +292,20 @@ func (s *Storage) updation(tx *sql.Tx, carrier *model.SchemasCarrier) error {
 		}
 
 		// execute the statement with args
-		if _, err := stmt.Exec(args...); err != nil {
+		result, err := stmt.Exec(args...)
+		if err != nil {
 			return err
+		}
+		// if the affected rows are zero, which means there is no record for updation
+		if affected, _ := result.RowsAffected(); affected == 0 {
+			return ErrorNoAffected
 		}
 
 		// update the metric for updation operation
 		totalUpdateCount.Add(1)
+
+		// handle only one updation every time
+		break
 	}
 
 	return nil
