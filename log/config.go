@@ -1,7 +1,7 @@
 package log
 
 import (
-	"TL-Gateway/log/lumberjack"
+	"TL-Data-Consumer/log/lumberjack"
 	"fmt"
 	"strings"
 	"sync/atomic"
