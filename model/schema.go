@@ -7,7 +7,31 @@ const (
 	InsertAction = "insert"
 	// UpdateAction - the "update" action
 	UpdateAction = "update"
+	// AddAction - the "add" action
+	AddAction = "add"
+	// DelAction - the "del" action
+	DelAction = "del"
 )
+
+// IsValidAction check if the action is valid
+func IsValidAction(action string) bool {
+	switch action {
+	case AddAction, DelAction, UpdateAction, InsertAction:
+		return true
+	}
+	return false
+}
+
+// IsBatchAction check if the action is batch action
+func IsBatchAction(action string) bool {
+	switch action {
+	case AddAction, DelAction, UpdateAction:
+		return false
+	case InsertAction:
+		return true
+	}
+	return false
+}
 
 // database schema configuration in consul
 //

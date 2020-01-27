@@ -1,7 +1,4 @@
 server:
-  brokers: ["192.168.0.4:9092"] # the kafka brokers
-  topics: ["TL-Trader"] # the  kafka topics
-  group: "group-consumer" # the kafka group
   admin_addr: "0.0.0.0:8001" # the admin entrypoint for prometheus and pprof
 
   # settings for consummer part
@@ -19,6 +16,15 @@ server:
   storage_routines: 2 # number of the goroutines, for batch inserting(default 2)
   storage_delay_time: 4 # waiting for reading channel when receive exit signals(default 4s)
   storage_wait_time: 2 # the waiting time for insertion when database happens exception(default 5s)
+
+kafka:
+  brokers: ["192.168.0.4:9092"] # the kafka brokers
+  topics: ["TL-Trader"] # the  kafka topics
+  group: "group-consumer" # the kafka group
+  tls_switch: false # the switch for the ca certification(default closed)
+  tls_perm: "certs/kafka/client.pem" # the perm file for ca certification in kafka
+  tls_key: "certs/kafka/client.key" # the key file for ca certification in kafka
+  tls_ca: "certs/kafka/ca.pem" # the ca file for ca certification in kafka
 
 db:
   user: "postgres" # the username for database

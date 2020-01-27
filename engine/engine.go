@@ -3,12 +3,15 @@ package engine
 import (
 	"TL-Data-Consumer/config"
 	"TL-Data-Consumer/consul"
+	"TL-Data-Consumer/db"
 	"TL-Data-Consumer/kafka"
 	"TL-Data-Consumer/log"
 	"TL-Data-Consumer/model"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	gcache "github.com/patrickmn/go-cache"
 	"reflect"
 	"sync"
 	"time"
@@ -25,6 +28,8 @@ const (
 	DefaultDelayTime = 2
 	// DefaultRefreshTime - use a timer to refresh the unreached buffer to storage periodly(default 5s)
 	DefaultRefreshTime = 5
+	// DefaultWriteBackTime - the sleep time when it needs to write the message back to the channel
+	DefaultWriteBackTime = 5
 
 	// SpecialJSONField - the json field uses for nested parsing
 	SpecialJSONField = "data"
@@ -32,22 +37,35 @@ const (
 	JSONDataTypeField = "dtype"
 	// JSONActionField - the json field represents for different operation
 	JSONActionField = "action"
+	// LookupSource - the source field name
+	LookupSource = "source"
+	// LookupPath - the path field name
+	LookupPath = "path"
+	// LookupSequence - the sequence id for source and path
+	LookupSequence = "source_path_id"
+)
+
+var (
+	// ErrorWriteBack - write the message back to the channel
+	ErrorWriteBack = errors.New("failed to fetch sequence id")
 )
 
 // Engine represents the pipeline for handling messages
 type Engine struct {
 	consumer *kafka.Consumer // consumer for message stream channel
 	consuler *consul.Consul  // consul for parsing the json schema with table schema
+	handler  *db.Handler     // the db handler for database
 
 	settings *config.Config                   // server configuration
 	cache    map[string]*model.SchemasCarrier // cache for different type of data,
 	cacheMux sync.RWMutex                     // mutex for cache
 	stream   chan *model.SchemasCarrier       // the required json schemas for database
 	ready    chan struct{}                    // mark the engine is ready
+	buffer   *gcache.Cache                    // local cache for source and path sequence
 }
 
 // NewEngine returns a new engine
-func NewEngine(settings *config.Config, consumer *kafka.Consumer, consuler *consul.Consul) *Engine {
+func NewEngine(settings *config.Config, consumer *kafka.Consumer, consuler *consul.Consul, handler *db.Handler) *Engine {
 	if settings.Server.EngineRoutines == 0 {
 		settings.Server.EngineRoutines = DefaultNumberOfRoutines
 	}
@@ -68,9 +86,11 @@ func NewEngine(settings *config.Config, consumer *kafka.Consumer, consuler *cons
 		settings: settings,
 		consumer: consumer,
 		consuler: consuler,
+		handler:  handler,
 		cache:    make(map[string]*model.SchemasCarrier),
 		ready:    make(chan struct{}, settings.Server.EngineRoutines),
 		stream:   make(chan *model.SchemasCarrier, settings.Server.EngineBuffer),
+		buffer:   gcache.New(gcache.NoExpiration, gcache.NoExpiration),
 	}
 }
 
@@ -174,7 +194,7 @@ func (e *Engine) parse(m *kafka.Message) {
 		log.Infof("get json field: %v", err)
 		return
 	}
-	if action != model.InsertAction && action != model.UpdateAction {
+	if ok := model.IsValidAction(action); !ok {
 		log.Infof("invalid action: %s", action)
 		return
 	}
@@ -189,6 +209,14 @@ func (e *Engine) parse(m *kafka.Message) {
 	// update the cache of table schemas
 	if err := e.update(newSchema, relation, action); err != nil {
 		log.Infof("update json schema %v: %v", string(m.Data), err)
+
+		if err == ErrorWriteBack {
+			// here happens a database error, write the message back to the channel
+			e.consumer.WriteMessage(m)
+			// sleep for several seconds, for it happens a database exception
+			time.Sleep(DefaultWriteBackTime * time.Second)
+		}
+
 		return
 	}
 }
@@ -203,8 +231,54 @@ func (e *Engine) newSchemasCarrier(dataType string, table string, action string)
 	}
 }
 
+// lookup the table for the id
+func (e *Engine) lookup(schema model.JSONSchema) (err error) {
+	// check if the source field is existed
+	v, ok := schema[LookupSource]
+	if !ok {
+		return
+	}
+	source := v.(string)
+	if source == "" {
+		return
+	}
+
+	// check if the path field is existed
+	v, ok = schema[LookupPath]
+	if !ok {
+		return
+	}
+	path := v.(string)
+	if path == "" {
+		return
+	}
+
+	key := source + path
+	// try to lookup from local cache
+	id, ok := e.buffer.Get(key)
+	if !ok {
+		// try to lookup from the database
+		id, err = e.handler.Lookup(source, path)
+		if err != nil {
+			return
+		}
+		// update the local cache
+		e.buffer.Set(key, id, gcache.NoExpiration)
+	}
+	// update the sequence to schema
+	schema[LookupSequence] = id
+
+	return
+}
+
 // update the cache of table schemas, if any data type reaches the threshold, append to channel
 func (e *Engine) update(schema model.JSONSchema, relation *model.Relation, action string) error {
+	// lookup sequence id for source and path
+	if err := e.lookup(schema); err != nil {
+		log.Infof("lookup: %v", err)
+		return ErrorWriteBack
+	}
+
 	finalSchema := model.JSONSchema{}
 	// filter with schema and relation
 	for _, column := range relation.Columns {
@@ -212,24 +286,23 @@ func (e *Engine) update(schema model.JSONSchema, relation *model.Relation, actio
 		if !ok {
 			return fmt.Errorf("%s is missed", column)
 		}
+
 		finalSchema[column] = v
 	}
 
 	// if ready isn't nil, it represents sending the schemas carrier to storage
 	var ready *model.SchemasCarrier
 
-	// handle the update action, without slice buffer
-	if action == model.UpdateAction {
+	// handle the action without slice buffer
+	if model.IsBatchAction(action) == false {
 		e.cacheMux.Lock()
 		// new a schemas carrier for update action
 		ready = e.newSchemasCarrier(relation.DataType, relation.Table, action)
 		// append the new schema to schemas carrier
 		ready.Schemas = append(ready.Schemas, finalSchema)
 		e.cacheMux.Unlock()
-	}
-
-	// handle the insert action
-	if action == model.InsertAction {
+	} else {
+		// handle the action with slice buffer
 		e.cacheMux.Lock()
 		// update the cache with locker
 		carrier, ok := e.cache[relation.DataType]

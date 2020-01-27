@@ -18,11 +18,19 @@ type DBStruct struct {
 	Name   string `yaml:"name"`
 }
 
+// KafkaStruct defines fields for kafka
+type KafkaStruct struct {
+	Brokers []string `yaml:"brokers"`
+	Topics  []string `yaml:"topics"`
+	Group   string   `yaml:"group"`
+	Switch  bool     `yaml:"tls_switch"`
+	Perm    string   `yaml:"tls_perm"`
+	Key     string   `yaml:"tls_key"`
+	Ca      string   `yaml:"tls_ca"`
+}
+
 // ServerStruct defines fields for main logic
 type ServerStruct struct {
-	Brokers           []string      `yaml:"brokers"`
-	Topics            []string      `yaml:"topics"`
-	Group             string        `yaml:"group"`
 	AdminAddr         string        `yaml:"admin_addr"`
 	ConsumeRoutines   int           `yaml:"consume_routines"`
 	ConsumeBuffer     int           `yaml:"consume_buffer"`
@@ -58,6 +66,7 @@ type LogStruct struct {
 type Config struct {
 	Server ServerStruct `yaml:"server"`
 	Consul ConsulStruct `yaml:"consul"`
+	Kafka  KafkaStruct  `yaml:"kafka"`
 	DB     DBStruct     `yaml:"db"`
 	Log    LogStruct    `yaml:"log"`
 }
@@ -73,11 +82,11 @@ func ParseYamlFile(filename string, c *Config) error {
 
 // Check validates the fields in config file
 func (c *Config) Check() error {
-	if len(c.Server.Topics) == 0 {
+	if len(c.Kafka.Topics) == 0 {
 		return errors.New("invalid topics")
 	}
 
-	if len(c.Server.Group) == 0 {
+	if len(c.Kafka.Group) == 0 {
 		return errors.New("invalid group")
 	}
 

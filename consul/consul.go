@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +73,18 @@ func (c *Consul) update() error {
 	return c.parse(pairs)
 }
 
+// trim the space string
+func trim(columns []string) []string {
+	var s []string
+	for _, e := range columns {
+		if strings.TrimSpace(e) == "" {
+			continue
+		}
+		s = append(s, e)
+	}
+	return s
+}
+
 // parse the bytes to schema structure
 func (c *Consul) parse(pairs api.KVPairs) error {
 	schemas := map[string]*model.Relation{}
@@ -88,6 +101,8 @@ func (c *Consul) parse(pairs api.KVPairs) error {
 		if err := yaml.Unmarshal(pair.Value, &s); err != nil {
 			return err
 		}
+		// trim the space item
+		s.Columns = trim(s.Columns)
 
 		// collect the relations for data type and table name
 		for _, relation := range s.Relations {
@@ -95,11 +110,13 @@ func (c *Consul) parse(pairs api.KVPairs) error {
 			if _, exist := schemas[relation.DataType]; exist {
 				return fmt.Errorf("data type %s is duplicate", relation.DataType)
 			}
+			// trim the space item of relation columns
+			relationColumns := trim(relation.Columns)
 
 			// merge base and flexible columns for every data type
 			columns := []string{}
 			columns = append(columns, s.Columns...)
-			columns = append(columns, relation.Columns...)
+			columns = append(columns, relationColumns...)
 
 			schemas[relation.DataType] = &model.Relation{
 				DataType: relation.DataType,

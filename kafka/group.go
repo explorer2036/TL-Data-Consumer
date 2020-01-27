@@ -4,6 +4,9 @@ import (
 	"TL-Data-Consumer/config"
 	"TL-Data-Consumer/log"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"io/ioutil"
 	"sync"
 	"time"
 
@@ -108,12 +111,42 @@ func (c *Consumer) ReadMessages() <-chan *Message {
 	return c.stream
 }
 
+// WriteMessage send the message to the channel
+func (c *Consumer) WriteMessage(m *Message) {
+	c.stream <- m
+}
+
 // Start create goroutines to do the consumer group jobs
 func (c *Consumer) Start(ctx context.Context, wg *sync.WaitGroup) {
 	for i := 0; i < c.settings.Server.ConsumeRoutines; i++ {
 		wg.Add(1)
 		go c.handle(ctx, wg)
 	}
+}
+
+// create tls config with certification files
+func (c *Consumer) newTlsConfig() *tls.Config {
+	cert, err := tls.LoadX509KeyPair(c.settings.Kafka.Perm, c.settings.Kafka.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	ca, err := ioutil.ReadFile(c.settings.Kafka.Ca)
+	if err != nil {
+		panic(err)
+	}
+
+	certPool := x509.NewCertPool()
+	if ok := certPool.AppendCertsFromPEM(ca); !ok {
+		panic("append certs from pem")
+	}
+
+	tlsConfig := &tls.Config{}
+	tlsConfig.RootCAs = certPool
+	tlsConfig.Certificates = []tls.Certificate{cert}
+	tlsConfig.BuildNameToCertificate()
+
+	return tlsConfig
 }
 
 // handle begins to consume the messages from kafka with topics and group
@@ -126,9 +159,15 @@ func (c *Consumer) handle(ctx context.Context, wg *sync.WaitGroup) {
 	config.Consumer.Group.Rebalance.Strategy = sarama.BalanceStrategyRange
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 
-	brokers := c.settings.Server.Brokers
-	group := c.settings.Server.Group
-	topics := c.settings.Server.Topics
+	// check if it's TLS connection
+	if c.settings.Kafka.Switch {
+		config.Net.TLS.Enable = true
+		config.Net.TLS.Config = c.newTlsConfig()
+	}
+
+	brokers := c.settings.Kafka.Brokers
+	group := c.settings.Kafka.Group
+	topics := c.settings.Kafka.Topics
 
 	// setup a new sarama consumer group
 	handler := groupHandler{consumer: c}

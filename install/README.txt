@@ -3,14 +3,39 @@ go test -v -args -f 2000 -c 21
 #### login ui
 curl -v -H "Content-type: application/json" -X POST -d '{"loginid":"alon@traderlinked.com","password":"XjsAZxOajA"}' http://localhost:5001/login
 
+#### source_path
+
+CREATE SEQUENCE source_path_id_sequence
+  start 1000
+  increment 1;
+
+CREATE TABLE tl_source_path (
+  id SERIAL PRIMARY KEY,
+	path VARCHAR(100) NOT NULL,
+	source VARCHAR(100) NOT NULL
+);
+
+#### errors
+
+fixed_columns: ["userid", "type"]
+relations:
+  - dtype: "data_errors"
+    table: "errors"
+    columns: [""]
+
+CREATE TABLE errors (
+	userid VARCHAR(100) NOT NULL,
+	type VARCHAR(20) NOT NULL
+);
+
 #### heartbeat
 
 // The yaml format in consul
-fixed_columns: ["userid", "source", "path", "timestamp"]
+fixed_columns: ["userid", "source_path_id"]
 relations:
   - dtype: "data_heartbeat"
     table: "heartbeat"
-    columns: ["status"]
+    columns: ["timestamp", "status"]
 
 // The json format
 {
@@ -27,22 +52,20 @@ relations:
 
 CREATE TABLE heartbeat (
 	userid VARCHAR(100) NOT NULL,
-	source VARCHAR(100) NOT NULL,
-	path VARCHAR(200) NOT NULL,
-	status VARCHAR(4) NOT NULL,
+	source_path_id integer,
+	status VARCHAR(10) NOT NULL,
 	timestamp TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE metric (
 	userid VARCHAR(100) NOT NULL,
-	source VARCHAR(100) NOT NULL,
-	path VARCHAR(200) NOT NULL,
+	source_path_id integer,
 	value FLOAT(2) NOT NULL,
 	time TIMESTAMPTZ NOT NULL,
 	timestamp TIMESTAMPTZ NOT NULL
 );
 
-fixed_columns: ["userid", "source", "path", "time", "timestamp"]
+fixed_columns: ["userid", "source_path_id", "time", "timestamp"]
 relations:
   - dtype: "data_metric"
     table: "metric"
