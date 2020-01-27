@@ -51,14 +51,14 @@ relations:
 }
 
 CREATE TABLE heartbeat (
-	userid VARCHAR(100) NOT NULL,
+	userid integer,
 	source_path_id integer,
 	status VARCHAR(10) NOT NULL,
 	timestamp TIMESTAMPTZ NOT NULL
 );
 
 CREATE TABLE metric (
-	userid VARCHAR(100) NOT NULL,
+	userid integer,
 	source_path_id integer,
 	value FLOAT(2) NOT NULL,
 	time TIMESTAMPTZ NOT NULL,
@@ -75,9 +75,8 @@ relations:
     columns: ["type", "value"]
 
 CREATE TABLE state (
-	userid VARCHAR(100) NOT NULL,
-	source VARCHAR(100) NOT NULL,
-	path VARCHAR(200) NOT NULL,
+	userid integer,
+	source_path_id integer,
 	type VARCHAR(50) NOT NULL,
 	value VARCHAR(50) NOT NULL,
 	time TIMESTAMPTZ NOT NULL,
