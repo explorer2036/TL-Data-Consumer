@@ -1,14 +1,95 @@
 ## Step 1: create the tables for testing
 
+#### tl_source_path
+
+CREATE SEQUENCE source_path_id_sequence
+  start 1000
+  increment 1;
+
+CREATE TABLE tl_source_path (
+  id SERIAL PRIMARY KEY,
+	path VARCHAR(100) NOT NULL,
+	source VARCHAR(100) NOT NULL
+);
+
+#### tl_errors
+
+
+CREATE TABLE tl_errors (
+	userid integer,
+	type VARCHAR(20) NOT NULL
+);
+
+#### tl_heartbeat
+
+CREATE TABLE tl_heartbeat (
+	userid integer,
+	source_path_id integer,
+	status VARCHAR(10) NOT NULL,
+	timestamp TIMESTAMPTZ NOT NULL
+);
+
+#### tl_metric
+
+CREATE TABLE tl_metric (
+	userid integer,
+	source_path_id integer,
+	value FLOAT(2) NOT NULL,
+	time TIMESTAMPTZ NOT NULL,
+	timestamp TIMESTAMPTZ NOT NULL
+);
+
+
+#### tl_user
+
+CREATE SEQUENCE user_id_sequence
+  start 100000000
+  increment 1;
+
+CREATE TABLE tl_user (
+  id SERIAL PRIMARY KEY
+);
+
+
 ## Step 2: prepare the schema mapping in consul for json format and database columns, all groups are under the root directory "database" 
 
+#### tl_errors
+
+fixed_columns: ["userid", "type"]
+relations:
+  - dtype: "data_errors"
+    table: "tl_errors"
+    columns: [""]
+
+#### tl_heartbeat
+
+// The yaml format in consul
+fixed_columns: ["userid", "source_path_id"]
+relations:
+  - dtype: "data_heartbeat"
+    table: "tl_heartbeat"
+    columns: ["timestamp", "status"]
+
+#### tl_metric
+fixed_columns: ["userid", "source_path_id", "time", "timestamp"]
+relations:
+  - dtype: "data_metric"
+    table: "tl_metric"
+    columns: ["value"]
+
+
 ## Step 3: create the topic for kafka, like TL-Trader with many partitions
+
+./kafka-topics.sh --zookeeper x.x.x.x:2181 --create --topic TL-Trader --partitions 30  --replication-factor 1
 
 ## Step 4: start the TL-Data-Consumer
 
 a. prepare the config.yml, the following fields should be updated in your environment
 
 server:
+  admin_addr: "x.x.x.x:8001" # the admin entrypoint for prometheus and pprof  #### use the host address
+  
+kafka:
   brokers: ["x.x.x.x:9092"] # the kafka brokers
   topics: ["TL-Trader"] # the  kafka topics
   admin_addr: "x.x.x.x:8001" # the admin entrypoint for prometheus and pprof  #### use the host address
@@ -26,14 +107,18 @@ consul:
 
 b. start the TL-Data-Consumer
 
+
+
 ## Step 5: start the TL-Gateway
 
 a. prepare the config.yml, the following fields should be updated in your environment
-
+  
 server:
   listen_addr: "x.x.x.x:15001" # the grpc listen address  #### use the host address
   admin_addr: "x.x.x.x:8002" # the admin entrypoint for prometheus and pprof  #### use the host address
-
+  id_service: "x.x.x.x:15002" # the id service address  #### use the id service address
+  cache: "local" # the cache type for token validation: local or redis   #### local or redis cache for token
+  
 fusion:
   api_key: "Kc-ntFUr767Qyk0RgbVU8dxLLdjmTM98_XjsAZxOajA" # api key for authorizing the user token
   api_url: "http://209.222.106.245:9011/" # api url for authorizing the user token
@@ -42,9 +127,33 @@ kafka:
   brokers: ["x.x.x.x:9092"] # the kafka brokers
   topic: "TL-Trader" # the kafka topic
 
+redis:
+  passwd: "" # empty if no passwd set for redis
+  addr: "x.x.x.x:6379" # the address for redis  # redis address
+  db: 0 # 0 - the default db of redis
+  
 b. start the TL-Gateway
 
-## Step 6: start the TL-Data-Collector
+
+## Step 6: start the TL-ID-Service
+
+a. prepare the config.yml, the following fields should be updated in your environment
+
+server:
+  listen_addr: "x.x.x.x:15002" # the grpc listen address     #### use the host address
+
+db:
+  user: "xxxx" # the username for postgresql database
+  passwd: "xxxx" # the passwd for postgresql database
+  host: "xxxx" # the host for postgresql database
+  port: "xxxx" # the port for postgresql database
+  name: "xxxx" # the database name
+  
+
+b. start the TL-ID-Service
+
+
+## Step 7: start the TL-Data-Collector
 
 a. prepare the config.yml, the following fields should be updated in your environment
 
@@ -53,3 +162,20 @@ app:
   collect_interval: 30 # the interval time for collect jobs(unit: second)
   gateway_addr: "x.x.x.x:15001" # the gateway address   ### the listen address of TL-Gateway
   base_dir: "e:\\collector" # base directory for program files   ### base directory for conf files, like token, userid, uuid
+
+
+## http api for login ui
+
+curl -v -H "Content-type: application/json" -X POST -d '{"loginid":"aqliodlong@126.com","password":"XjsAZxOajA"}' http://localhost:5001/login
+curl -v -H "Content-type: application/json" -X POST -d '{"loginid":"aqliodlong@126.com","password":"XjsAZxOajA"}' http://localhost:5001/register
+curl -v -H "Content-type: application/json" -X POST http://localhost:5001/health
+
+CREATE TABLE tl_price_quote (
+	userid integer,
+	source_path_id integer,
+	ticker VARCHAR(50) NOT NULL,
+	last FLOAT(2) NOT NULL,
+	bid FLOAT(2) NOT NULL,
+	ask FLOAT(2) NOT NULL,
+	time TIMESTAMPTZ NOT NULL
+);
