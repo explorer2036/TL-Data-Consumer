@@ -2,14 +2,10 @@
 
 #### tl_source_path
 
-CREATE SEQUENCE source_path_id_sequence
-  start 1000
-  increment 1;
-
 CREATE TABLE tl_source_path (
   id SERIAL PRIMARY KEY,
-	path VARCHAR(100) NOT NULL,
-	source VARCHAR(100) NOT NULL
+	path VARCHAR(64) NOT NULL,
+	source VARCHAR(40) NOT NULL
 );
 
 #### tl_errors
@@ -42,12 +38,9 @@ CREATE TABLE tl_metric (
 
 #### tl_user
 
-CREATE SEQUENCE user_id_sequence
-  start 100000000
-  increment 1;
-
 CREATE TABLE tl_user (
-  id SERIAL PRIMARY KEY
+  id SERIAL PRIMARY KEY,
+  source VARCHAR(40) NOT NULL
 );
 
 

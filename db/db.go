@@ -8,10 +8,12 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
-	"strings"
-	"time"
 )
 
 const (
@@ -65,10 +67,10 @@ func init() {
 
 // Handler for db operation
 type Handler struct {
-	consuler *consul.Consul // consul for getting the fixed columns
-	settings *config.Config // the settings for storage
-	db       *sql.DB        // database connection pool
-
+	consuler  *consul.Consul // consul for getting the fixed columns
+	settings  *config.Config // the settings for storage
+	db        *sql.DB        // database connection pool
+	upsertMux sync.Mutex     // mutex for upsert operation
 }
 
 // NewHandler returns a new db handler
@@ -503,8 +505,10 @@ func (d *Handler) flush(carrier *model.SchemasCarrier) error {
 		err = d.deletion(tx, carrier)
 
 	case model.UpdateAction:
-		// prepare the columns and values with statement for updation
+		// prepare the columns and values with statement for updation, need to lock the logic
+		d.upsertMux.Lock()
 		err = d.upsertion(tx, carrier)
+		d.upsertMux.Unlock()
 	}
 	if err != nil {
 		return err
@@ -514,7 +518,7 @@ func (d *Handler) flush(carrier *model.SchemasCarrier) error {
 	return tx.Commit()
 }
 
-// try to flush the schemas, if failed, sleep for a moment
+// TryFlush - try to flush the schemas, if failed, sleep for a moment
 func (d *Handler) TryFlush(carrier *model.SchemasCarrier) {
 	for {
 		// flush the schemas to database
@@ -580,7 +584,7 @@ func (d *Handler) lookup(tx *sql.Tx, source string, path string) (id int, err er
 	if err = stmt.QueryRow(source, path).Scan(&id); err != nil {
 		if err == sql.ErrNoRows {
 			// generate the sequence id
-			stmt, err = tx.Prepare("select nextval('source_path_id_sequence')")
+			stmt, err = tx.Prepare("select nextval('tl_source_path_id_seq')")
 			if err != nil {
 				log.Infof("%v", err)
 				return
@@ -603,6 +607,7 @@ func (d *Handler) lookup(tx *sql.Tx, source string, path string) (id int, err er
 				return
 			}
 
+			log.Infof("tl_source_path insert, id: %d, source: %s, path: %s", id, source, path)
 			// no rows affected
 			if affected, _ := result.RowsAffected(); affected == 0 {
 				err = fmt.Errorf("no rows affected")

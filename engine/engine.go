@@ -11,10 +11,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gcache "github.com/patrickmn/go-cache"
 	"reflect"
 	"sync"
 	"time"
+
+	gcache "github.com/patrickmn/go-cache"
 )
 
 const (
@@ -56,12 +57,13 @@ type Engine struct {
 	consuler *consul.Consul  // consul for parsing the json schema with table schema
 	handler  *db.Handler     // the db handler for database
 
-	settings *config.Config                   // server configuration
-	cache    map[string]*model.SchemasCarrier // cache for different type of data,
-	cacheMux sync.RWMutex                     // mutex for cache
-	stream   chan *model.SchemasCarrier       // the required json schemas for database
-	ready    chan struct{}                    // mark the engine is ready
-	buffer   *gcache.Cache                    // local cache for source and path sequence
+	settings  *config.Config                   // server configuration
+	cache     map[string]*model.SchemasCarrier // cache for different type of data,
+	cacheMux  sync.Mutex                       // mutex for cache
+	stream    chan *model.SchemasCarrier       // the required json schemas for database
+	ready     chan struct{}                    // mark the engine is ready
+	buffer    *gcache.Cache                    // local cache for source and path sequence
+	bufferMux sync.Mutex
 }
 
 // NewEngine returns a new engine
@@ -254,17 +256,21 @@ func (e *Engine) lookup(schema model.JSONSchema) (err error) {
 	}
 
 	key := source + path
-	// try to lookup from local cache
+	// try to lookup from local cache with lock
+	e.bufferMux.Lock()
 	id, ok := e.buffer.Get(key)
 	if !ok {
 		// try to lookup from the database
 		id, err = e.handler.Lookup(source, path)
 		if err != nil {
+			e.bufferMux.Unlock()
 			return
 		}
 		// update the local cache
 		e.buffer.Set(key, id, gcache.NoExpiration)
 	}
+	e.bufferMux.Unlock()
+
 	// update the sequence to schema
 	schema[LookupSequence] = id
 
